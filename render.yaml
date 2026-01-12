@@ -1,16 +1,15 @@
 services:
   - type: web
-    name: wa-django-adapter
+    name: whatsapp-bot
     env: node
     buildCommand: chmod +x render-build.sh && ./render-build.sh
     startCommand: npm start
     healthCheckPath: /health
+    autoDeploy: true
     envVars:
       - key: PORT
         value: 3000
-      - key: DJANGO_BASE_URL
-        sync: false
-      - key: DJANGO_AUTH_TOKEN
-        sync: false
       - key: PUPPETEER_SKIP_CHROMIUM_DOWNLOAD
         value: "true"
+      - key: NODE_ENV
+        value: production
