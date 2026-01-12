@@ -59,7 +59,7 @@ app.listen(PORT, "0.0.0.0", () => {
 // WhatsApp client
 // ----------------------------
 const client = new Client({
-  authStrategy: new LocalAuth(),
+    authStrategy: new LocalAuth({ dataPath: "/var/data/.wwebjs_auth" }),
   puppeteer: {
     headless: true,
     executablePath: process.env.PUPPETEER_EXECUTABLE_PATH || "/usr/bin/chromium",
