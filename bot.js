@@ -1,25 +1,3 @@
-
-const fs = require("fs");
-
-function resolveChromePath() {
-  const candidates = [
-    process.env.PUPPETEER_EXECUTABLE_PATH,
-    "/usr/bin/chromium",
-    "/usr/bin/chromium-browser",
-    "/usr/bin/google-chrome",
-    "/usr/bin/google-chrome-stable",
-  ].filter(Boolean);
-
-  for (const p of candidates) {
-    if (fs.existsSync(p)) return p;
-  }
-  return null;
-}
-
-const CHROME_PATH = resolveChromePath();
-console.log("🧭 Resolved CHROME_PATH:", CHROME_PATH);
-
-
 const { Client, LocalAuth } = require("whatsapp-web.js");
 const qrcodeTerminal = require("qrcode-terminal");
 const QRCode = require("qrcode");
@@ -78,18 +56,39 @@ app.listen(PORT, "0.0.0.0", () => {
 });
 
 // ----------------------------
-// WhatsApp client
+// WhatsApp client - FIXED FOR RENDER
 // ----------------------------
-
+const puppeteerOptions = {
+  args: [
+    '--no-sandbox',
+    '--disable-setuid-sandbox',
+    '--disable-dev-shm-usage',
+    '--disable-accelerated-2d-canvas',
+    '--no-first-run',
+    '--no-zygote',
+    '--single-process',
+    '--disable-gpu',
+    '--disable-software-rasterizer',
+    '--disable-features=site-per-process'
+  ],
+  headless: true,
+  ignoreHTTPSErrors: true,
+  executablePath: process.env.CHROME_BIN || '/usr/bin/chromium-browser'
+};
 const client = new Client({
-  authStrategy:  new LocalAuth({ dataPath: "/var/data/.wwebjs_auth" }),
-  puppeteer: {
-    headless: true,
-    executablePath: CHROME_PATH || undefined,
-    args: ["--no-sandbox", "--disable-setuid-sandbox"],
-  },
+  authStrategy: new LocalAuth({
+    dataPath: "./.wwebjs_auth" // Ensure persistent auth storage
+  }),
+  puppeteer: puppeteerOptions,
+  webVersionCache: {
+    type: "remote", // Use remote WebWhatsApp version
+    remotePath: "https://raw.githubusercontent.com/wppconnect-team/wa-version/main/html/2.2412.54.html"
+  }
 });
 
+client.on("loading_screen", (percent, message) => {
+  console.log(`🔄 Loading WhatsApp: ${percent}% - ${message}`);
+});
 
 client.on("qr", async (qr) => {
   console.log("📲 QR RECEIVED (also at /qr)");
@@ -103,13 +102,33 @@ client.on("qr", async (qr) => {
   }
 });
 
-client.on("authenticated", () => console.log("✅ WhatsApp authenticated"));
+client.on("authenticated", () => {
+  console.log("✅ WhatsApp authenticated");
+  console.log("💾 Auth saved to ./.wwebjs_auth/");
+});
+
 client.on("auth_failure", (m) => console.error("❌ Auth failure:", m));
 
 client.on("ready", () => {
   WA_READY = true;
   LAST_QR_DATAURL = null;
   console.log("✅ WhatsApp client ready!");
+  console.log("📱 Connected to WhatsApp successfully!");
+});
+
+// ----------------------------
+// Handle cleanup on exit
+// ----------------------------
+process.on("SIGINT", async () => {
+  console.log("🛑 Shutting down gracefully...");
+  await client.destroy();
+  process.exit(0);
+});
+
+process.on("SIGTERM", async () => {
+  console.log("🛑 Received SIGTERM, shutting down...");
+  await client.destroy();
+  process.exit(0);
 });
 
 // ----------------------------
@@ -136,8 +155,13 @@ async function forwardToDjango({ external_id, text, provider_message_id, raw }) 
   if (DJANGO_AUTH_TOKEN) headers["Authorization"] = `Bearer ${DJANGO_AUTH_TOKEN}`;
 
   const payload = { external_id, text, provider_message_id, raw };
-  const resp = await axios.post(DJANGO_CHAT_URL, payload, { headers, timeout: 15000 });
-  return resp.data.reply_text || resp.data.reply || "";
+  try {
+    const resp = await axios.post(DJANGO_CHAT_URL, payload, { headers, timeout: 15000 });
+    return resp.data.reply_text || resp.data.reply || "";
+  } catch (error) {
+    console.error("❌ Django API error:", error.response?.data || error.message);
+    return "⚠️ Service temporarily unavailable. Please try again later.";
+  }
 }
 
 // ----------------------------
@@ -147,29 +171,51 @@ client.on("message", async (msg) => {
   try {
     if (!WA_READY) return;
     if (isGroupChat(msg.from)) return;
+    
+    // Ignore system messages
+    if (msg.type === 'chat' || msg.type === 'image_caption' || msg.type === 'video') {
+      const external_id = extractExternalIdFromMsg(msg);
+      const provider_message_id = getProviderMessageId(msg);
+      const text = (msg.body || "").trim();
+      
+      if (!external_id || !text) return;
 
-    const external_id = extractExternalIdFromMsg(msg);
-    const provider_message_id = getProviderMessageId(msg);
-    const text = (msg.body || "").trim();
-    if (!external_id || !text) return;
+      const raw = {
+        from: msg.from,
+        timestamp: msg.timestamp,
+        hasMedia: !!msg.hasMedia,
+        type: msg.type,
+        mediaKey: msg.mediaKey,
+      };
 
-    const raw = {
-      from: msg.from,
-      timestamp: msg.timestamp,
-      hasMedia: !!msg.hasMedia,
-      type: msg.type,
-    };
+      console.log(`📥 Incoming from ${external_id}: ${text.substring(0, 50)}...`);
+      
+      const replyText = await forwardToDjango({ external_id, text, provider_message_id, raw });
+      const finalReply = replyText?.trim() ? replyText : "⚠️ Sorry — I couldn't process that.";
 
-    const replyText = await forwardToDjango({ external_id, text, provider_message_id, raw });
-    const finalReply = replyText?.trim() ? replyText : "⚠️ Sorry — I couldn’t process that.";
-
-    await client.sendMessage(msg.from, finalReply);
+      await client.sendMessage(msg.from, finalReply);
+      console.log(`📤 Replied to ${external_id}`);
+    }
   } catch (err) {
     console.error("❌ Inbound error:", err?.response?.data || err.message || err);
     try {
       await client.sendMessage(msg.from, "⚠️ System busy. Try again.");
-    } catch {}
+    } catch (sendErr) {
+      console.error("❌ Failed to send error message:", sendErr.message);
+    }
   }
 });
 
-client.initialize();
+// Initialize with error handling
+async function initializeWhatsApp() {
+  try {
+    console.log("🔄 Initializing WhatsApp Web...");
+    await client.initialize();
+  } catch (error) {
+    console.error("❌ Failed to initialize WhatsApp:", error.message);
+    console.log("💡 If this is a Chromium issue, try rebuilding with puppeteer dependencies");
+    process.exit(1);
+  }
+}
+
+initializeWhatsApp();
