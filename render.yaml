@@ -2,14 +2,12 @@ services:
   - type: web
     name: whatsapp-bot
     env: node
-    buildCommand: chmod +x render-build.sh && ./render-build.sh
+    buildCommand: npm install
     startCommand: npm start
     healthCheckPath: /health
     autoDeploy: true
     envVars:
       - key: PORT
         value: 3000
-      - key: PUPPETEER_SKIP_CHROMIUM_DOWNLOAD
-        value: "true"
       - key: NODE_ENV
         value: production
