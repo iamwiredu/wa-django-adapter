@@ -1,3 +1,25 @@
+
+const fs = require("fs");
+
+function resolveChromePath() {
+  const candidates = [
+    process.env.PUPPETEER_EXECUTABLE_PATH,
+    "/usr/bin/chromium",
+    "/usr/bin/chromium-browser",
+    "/usr/bin/google-chrome",
+    "/usr/bin/google-chrome-stable",
+  ].filter(Boolean);
+
+  for (const p of candidates) {
+    if (fs.existsSync(p)) return p;
+  }
+  return null;
+}
+
+const CHROME_PATH = resolveChromePath();
+console.log("🧭 Resolved CHROME_PATH:", CHROME_PATH);
+
+
 const { Client, LocalAuth } = require("whatsapp-web.js");
 const qrcodeTerminal = require("qrcode-terminal");
 const QRCode = require("qrcode");
@@ -58,14 +80,16 @@ app.listen(PORT, "0.0.0.0", () => {
 // ----------------------------
 // WhatsApp client
 // ----------------------------
+
 const client = new Client({
-    authStrategy: new LocalAuth({ dataPath: "/var/data/.wwebjs_auth" }),
+  authStrategy:  new LocalAuth({ dataPath: "/var/data/.wwebjs_auth" }),
   puppeteer: {
     headless: true,
-    executablePath: process.env.PUPPETEER_EXECUTABLE_PATH || "/usr/bin/chromium",
+    executablePath: CHROME_PATH || undefined,
     args: ["--no-sandbox", "--disable-setuid-sandbox"],
   },
 });
+
 
 client.on("qr", async (qr) => {
   console.log("📲 QR RECEIVED (also at /qr)");
