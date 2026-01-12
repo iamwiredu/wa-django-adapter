@@ -1,7 +1,7 @@
 #!/bin/bash
 set -ex
 
-echo "🚀 Starting build process on Render..."
+echo "🚀 Starting Render build process..."
 
 # Install system dependencies
 apt-get update
@@ -45,18 +45,22 @@ apt-get install -y \
   lsb-release \
   xdg-utils
 
-# Install Google Chrome
-wget -q -O - https://dl-ssl.google.com/linux/linux_signing_key.pub | apt-key add -
-sh -c 'echo "deb [arch=amd64] http://dl.google.com/linux/chrome/deb/ stable main" >> /etc/apt/sources.list.d/google.list'
-apt-get update
-apt-get install -y google-chrome-stable
+# Download and install Chrome
+echo "📥 Installing Google Chrome..."
+wget -q -O chrome.deb "https://dl.google.com/linux/direct/google-chrome-stable_current_amd64.deb"
+apt-get install -y ./chrome.deb
+rm chrome.deb
 
-# Verify Chrome installation
+# Verify installation
 echo "✅ Chrome version:"
 google-chrome --version
 
-# Install Node dependencies
+# Install puppeteer Chrome
 echo "📦 Installing Node dependencies..."
 npm install
+
+# Install Chrome via puppeteer
+echo "🔧 Installing Chrome via puppeteer..."
+npx puppeteer browsers install chrome
 
 echo "✅ Build completed successfully!"
