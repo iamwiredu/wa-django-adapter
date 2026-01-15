@@ -121,21 +121,25 @@ app.listen(PORT, "0.0.0.0", () => {
 // ----------------------------
 // WhatsApp client
 // ----------------------------
-// NOTE: If you deploy with Docker+Chromium, set PUPPETEER_EXECUTABLE_PATH
 const client = new Client({
   authStrategy: new LocalAuth({
     clientId: "render-wa",
     dataPath: AUTH_PATH,
   }),
+
+  // Helps when sessions reconnect / conflicts happen
+  takeoverOnConflict: true,
+  takeoverTimeoutMs: 0,
+
   puppeteer: {
-  headless: true,
-  args: [
-    "--no-sandbox",
-    "--disable-setuid-sandbox",
-    "--disable-dev-shm-usage",
-    "--disable-gpu",
-  ],
-},
+    headless: true,
+    args: [
+      "--no-sandbox",
+      "--disable-setuid-sandbox",
+      "--disable-dev-shm-usage",
+      "--disable-gpu",
+    ],
+  },
 });
 
 // Extra logging so you always know what’s happening
@@ -280,7 +284,7 @@ client.on("message", async (msg) => {
     console.log("🔥 inbound handler hit", { WA_READY, from: msg.from, body: msg.body });
 
     if (!WA_READY) return;
-    if (msg.fromMe) return; // ignore messages sent by the bot/account itself
+    if (msg.fromMe) return;
     if (isGroupChat(msg.from)) return;
 
     const external_id = extractExternalIdFromMsg(msg);
@@ -311,12 +315,24 @@ client.on("message", async (msg) => {
         ? replyText
         : "⚠️ Sorry — I couldn’t process that. Please try again.";
 
-    console.log("📤 Sending reply to:", msg.from, finalReply);
-    await client.sendMessage(msg.from, finalReply);
+    // ✅ FIX: send reply via chat (more reliable than client.sendMessage for some WA web builds)
+    console.log("📤 Sending reply to chat:", msg.from, finalReply);
+
+    try {
+      const chat = await msg.getChat();
+      await chat.sendStateTyping();
+      await new Promise((r) => setTimeout(r, 400));
+      await chat.clearState();
+      await chat.sendMessage(finalReply);
+      console.log("✅ Reply sent");
+    } catch (sendErr) {
+      console.error("❌ Send failed:", sendErr?.message || sendErr);
+    }
   } catch (err) {
     console.error("❌ Inbound error:", err?.response?.data || err.message || err);
     try {
-      await client.sendMessage(msg.from, "⚠️ System is busy. Please try again.");
+      const chat = await msg.getChat();
+      await chat.sendMessage("⚠️ System is busy. Please try again.");
     } catch {}
   }
 });
