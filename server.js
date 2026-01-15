@@ -1,10 +1,13 @@
-// bot.js
+// server.js (full code)
+// WhatsApp Web (whatsapp-web.js) -> Django forwarder with Render-friendly Express + QR page + persistent auth + debug logs
+
 const { Client, LocalAuth } = require("whatsapp-web.js");
 const qrcodeTerminal = require("qrcode-terminal");
-const QRCode = require("qrcode"); // npm i qrcode
+const QRCode = require("qrcode");
 const axios = require("axios");
 const express = require("express");
 const cors = require("cors");
+const fs = require("fs");
 
 // ----------------------------
 // Config
@@ -26,6 +29,33 @@ app.use(express.json());
 let WA_READY = false;
 let LAST_QR_DATAURL = null;
 
+// ----------------------------
+// Auth path (Render persistent disk recommended)
+// ----------------------------
+let AUTH_PATH = process.env.WWEBJS_AUTH_PATH || "/var/data/.wwebjs_auth";
+
+function ensureWritableDir(path) {
+  try {
+    fs.mkdirSync(path, { recursive: true });
+    fs.writeFileSync(`${path}/.write_test`, "ok");
+    fs.unlinkSync(`${path}/.write_test`);
+    console.log("✅ Auth path writable:", path);
+    return true;
+  } catch (e) {
+    console.error("❌ Auth path NOT writable:", path, e.message || e);
+    return false;
+  }
+}
+
+// If /var/data isn't mounted/writable, fall back to /tmp
+if (!ensureWritableDir(AUTH_PATH)) {
+  AUTH_PATH = "/tmp/.wwebjs_auth";
+  ensureWritableDir(AUTH_PATH);
+}
+
+// ----------------------------
+// Routes
+// ----------------------------
 app.get("/", (req, res) => {
   res.send("🤖 WhatsApp adapter running ✅ — visit /qr to scan.");
 });
@@ -36,7 +66,29 @@ app.get("/health", (req, res) => {
     whatsapp_ready: WA_READY,
     has_qr: !!LAST_QR_DATAURL,
     django_chat_url: DJANGO_CHAT_URL,
+    auth_path: AUTH_PATH,
   });
+});
+
+// Debug: can this container write to auth path?
+app.get("/debug/fs", (req, res) => {
+  try {
+    fs.mkdirSync(AUTH_PATH, { recursive: true });
+    fs.writeFileSync(`${AUTH_PATH}/_test.txt`, "ok");
+    res.json({ ok: true, auth_path: AUTH_PATH });
+  } catch (e) {
+    res.status(500).json({ ok: false, auth_path: AUTH_PATH, error: String(e) });
+  }
+});
+
+// Debug: test Django reachable (GET base URL)
+app.get("/debug/django", async (_req, res) => {
+  try {
+    const r = await axios.get(DJANGO_BASE_URL, { timeout: 8000 });
+    res.json({ ok: true, status: r.status });
+  } catch (e) {
+    res.status(500).json({ ok: false, error: e.message });
+  }
 });
 
 // Browser QR page (helpful on Render)
@@ -50,6 +102,10 @@ app.get("/qr", (req, res) => {
         <p>WhatsApp → Linked devices → Link a device</p>
         <img src="${LAST_QR_DATAURL}" style="width:320px;height:320px;" />
         <p>Refresh this page if it expires.</p>
+        <hr/>
+        <p><b>Status:</b> WA_READY=${WA_READY}</p>
+        <p><b>AUTH_PATH:</b> ${AUTH_PATH}</p>
+        <p><b>Django URL:</b> ${DJANGO_CHAT_URL}</p>
       </body>
     </html>
   `);
@@ -59,24 +115,33 @@ app.get("/qr", (req, res) => {
 app.listen(PORT, "0.0.0.0", () => {
   console.log(`🌍 Express server running on port ${PORT}`);
   console.log(`➡️ Django chat URL: ${DJANGO_CHAT_URL}`);
+  console.log(`🗄️ Auth path: ${AUTH_PATH}`);
 });
 
 // ----------------------------
 // WhatsApp client
 // ----------------------------
 // NOTE: If you deploy with Docker+Chromium, set PUPPETEER_EXECUTABLE_PATH
-const AUTH_PATH = process.env.WWEBJS_AUTH_PATH || "/var/data/.wwebjs_auth";
-
 const client = new Client({
   authStrategy: new LocalAuth({
-  clientId: "render-wa",
-  dataPath: AUTH_PATH,
-}),
+    clientId: "render-wa",
+    dataPath: AUTH_PATH,
+  }),
   puppeteer: {
     headless: true,
     executablePath: process.env.PUPPETEER_EXECUTABLE_PATH, // leave undefined locally
-    args: ["--no-sandbox", "--disable-setuid-sandbox"],
+    args: [
+      "--no-sandbox",
+      "--disable-setuid-sandbox",
+      "--disable-dev-shm-usage",
+      "--disable-gpu",
+    ],
   },
+});
+
+// Extra logging so you always know what’s happening
+client.on("loading_screen", (percent, message) => {
+  console.log(`⏳ loading_screen: ${percent}%`, message || "");
 });
 
 client.on("qr", async (qr) => {
@@ -125,7 +190,7 @@ app.post("/send-payment-confirmation", async (req, res) => {
     await client.sendMessage(fullNumber, message);
     return res.json({ success: true });
   } catch (err) {
-    console.error("❌ Error sending WhatsApp message:", err);
+    console.error("❌ Error sending WhatsApp message:", err?.response?.data || err.message || err);
     return res.status(500).json({ success: false, error: "Failed to send message" });
   }
 });
@@ -148,7 +213,7 @@ app.post("/start-address-flow", async (req, res) => {
     await client.sendMessage(fullNumber, message);
     return res.json({ success: true });
   } catch (err) {
-    console.error("❌ Error sending WhatsApp address message:", err);
+    console.error("❌ Error sending WhatsApp address message:", err?.response?.data || err.message || err);
     return res.status(500).json({ success: false, error: "Failed to send address request" });
   }
 });
@@ -187,11 +252,36 @@ async function forwardToDjango({ external_id, text, provider_message_id, raw }) 
 }
 
 // ----------------------------
+// Debug: message events
+// ----------------------------
+client.on("message_create", (msg) => {
+  console.log("🟣 message_create:", {
+    from: msg.from,
+    to: msg.to,
+    fromMe: msg.fromMe,
+    body: msg.body,
+    type: msg.type,
+  });
+});
+
+client.on("message", (msg) => {
+  console.log("🟢 message received:", {
+    from: msg.from,
+    fromMe: msg.fromMe,
+    body: msg.body,
+    type: msg.type,
+  });
+});
+
+// ----------------------------
 // Inbound WhatsApp → Django → Reply
 // ----------------------------
 client.on("message", async (msg) => {
   try {
+    console.log("🔥 inbound handler hit", { WA_READY, from: msg.from, body: msg.body });
+
     if (!WA_READY) return;
+    if (msg.fromMe) return; // ignore messages sent by the bot/account itself
     if (isGroupChat(msg.from)) return;
 
     const external_id = extractExternalIdFromMsg(msg);
@@ -206,13 +296,23 @@ client.on("message", async (msg) => {
       type: msg.type,
     };
 
-    const replyText = await forwardToDjango({ external_id, text, provider_message_id, raw });
+    console.log("➡️ Forwarding to Django", { external_id, provider_message_id, text, url: DJANGO_CHAT_URL });
+
+    let replyText = "";
+    try {
+      replyText = await forwardToDjango({ external_id, text, provider_message_id, raw });
+      console.log("✅ Django replied:", replyText);
+    } catch (e) {
+      console.error("❌ Django error:", e?.response?.status, e?.response?.data || e.message);
+      replyText = "";
+    }
 
     const finalReply =
       replyText && String(replyText).trim().length > 0
         ? replyText
         : "⚠️ Sorry — I couldn’t process that. Please try again.";
 
+    console.log("📤 Sending reply to:", msg.from, finalReply);
     await client.sendMessage(msg.from, finalReply);
   } catch (err) {
     console.error("❌ Inbound error:", err?.response?.data || err.message || err);
@@ -222,4 +322,26 @@ client.on("message", async (msg) => {
   }
 });
 
+// ----------------------------
+// Init + shutdown safety
+// ----------------------------
 client.initialize();
+
+async function shutdown(signal) {
+  console.log(`🛑 Received ${signal}, shutting down...`);
+  try {
+    await client.destroy();
+  } catch {}
+  process.exit(0);
+}
+
+process.on("SIGTERM", () => shutdown("SIGTERM"));
+process.on("SIGINT", () => shutdown("SIGINT"));
+
+process.on("unhandledRejection", (reason) => {
+  console.error("🔥 Unhandled Rejection:", reason);
+});
+
+process.on("uncaughtException", (err) => {
+  console.error("🔥 Uncaught Exception:", err);
+});
