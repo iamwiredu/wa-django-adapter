@@ -33,6 +33,17 @@ let LAST_QR_DATAURL = null;
 // Auth path (Render persistent disk recommended)
 // ----------------------------
 let AUTH_PATH = process.env.WWEBJS_AUTH_PATH || "/var/data/.wwebjs_auth";
+// Separate Chromium profile dir (NOT the whatsapp auth dir)
+const CHROME_PROFILE_DIR =
+  process.env.CHROME_PROFILE_DIR || "/tmp/chrome-profile-render-wa";
+
+try {
+  fs.rmSync(CHROME_PROFILE_DIR, { recursive: true, force: true });
+  fs.mkdirSync(CHROME_PROFILE_DIR, { recursive: true });
+  console.log("✅ Chrome profile dir reset:", CHROME_PROFILE_DIR);
+} catch (e) {
+  console.error("❌ Could not reset Chrome profile dir:", e?.message || e);
+}
 
 function ensureWritableDir(path) {
   try {
@@ -138,6 +149,7 @@ const client = new Client({
       "--disable-setuid-sandbox",
       "--disable-dev-shm-usage",
       "--disable-gpu",
+      `--user-data-dir=${CHROME_PROFILE_DIR}`,
     ],
   },
 });
@@ -333,7 +345,7 @@ client.on("message", async (msg) => {
     try {
       const chat = await msg.getChat();
       await chat.sendMessage("⚠️ System is busy. Please try again.");
-    } catch {}
+    } catch { }
   }
 });
 
@@ -346,7 +358,7 @@ async function shutdown(signal) {
   console.log(`🛑 Received ${signal}, shutting down...`);
   try {
     await client.destroy();
-  } catch {}
+  } catch { }
   process.exit(0);
 }
 
