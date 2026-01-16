@@ -1,6 +1,5 @@
-// server.js (updated)
-// WhatsApp Web (whatsapp-web.js) -> Django forwarder with Render-friendly Express + QR page + persistent auth
-// Adds: Chrome profile dir + Singleton lock cleanup + initialize() retry + safer startup logging + chat.sendMessage replies
+// server.js (full code)
+// WhatsApp Web (whatsapp-web.js) -> Django forwarder with Render-friendly Express + QR page + persistent auth + debug logs
 
 const { Client, LocalAuth } = require("whatsapp-web.js");
 const qrcodeTerminal = require("qrcode-terminal");
@@ -31,7 +30,7 @@ let WA_READY = false;
 let LAST_QR_DATAURL = null;
 
 // ----------------------------
-// Auth path (Render disk recommended)
+// Auth path (Render persistent disk recommended)
 // ----------------------------
 let AUTH_PATH = process.env.WWEBJS_AUTH_PATH || "/var/data/.wwebjs_auth";
 
@@ -55,49 +54,24 @@ if (!ensureWritableDir(AUTH_PATH)) {
 }
 
 // ----------------------------
-// Chrome profile dir (prevents "profile in use" locks)
-// ----------------------------
-function clearChromeSingletonLocks(profileDir) {
-  const files = ["SingletonCookie", "SingletonLock", "SingletonSocket"];
-  for (const f of files) {
-    try {
-      fs.rmSync(`${profileDir}/${f}`, { force: true });
-    } catch {}
-  }
-}
-
-// Use a unique profile dir per process to avoid overlaps during deploy/restarts
-const CHROME_PROFILE_DIR =
-  process.env.CHROME_PROFILE_DIR || `/tmp/chrome-profile-render-wa-${process.pid}`;
-
-try {
-  fs.rmSync(CHROME_PROFILE_DIR, { recursive: true, force: true }); // clean start (recommended on Render)
-  fs.mkdirSync(CHROME_PROFILE_DIR, { recursive: true });
-  clearChromeSingletonLocks(CHROME_PROFILE_DIR);
-  console.log("✅ Chrome profile dir ready:", CHROME_PROFILE_DIR);
-} catch (e) {
-  console.error("❌ Could not prepare Chrome profile dir:", e?.message || e);
-}
-
-// ----------------------------
 // Routes
 // ----------------------------
-app.get("/", (_req, res) => {
+app.get("/", (req, res) => {
   res.send("🤖 WhatsApp adapter running ✅ — visit /qr to scan.");
 });
 
-app.get("/health", (_req, res) => {
+app.get("/health", (req, res) => {
   res.json({
     ok: true,
     whatsapp_ready: WA_READY,
     has_qr: !!LAST_QR_DATAURL,
     django_chat_url: DJANGO_CHAT_URL,
     auth_path: AUTH_PATH,
-    chrome_profile_dir: CHROME_PROFILE_DIR,
   });
 });
 
-app.get("/debug/fs", (_req, res) => {
+// Debug: can this container write to auth path?
+app.get("/debug/fs", (req, res) => {
   try {
     fs.mkdirSync(AUTH_PATH, { recursive: true });
     fs.writeFileSync(`${AUTH_PATH}/_test.txt`, "ok");
@@ -107,6 +81,7 @@ app.get("/debug/fs", (_req, res) => {
   }
 });
 
+// Debug: test Django reachable (GET base URL)
 app.get("/debug/django", async (_req, res) => {
   try {
     const r = await axios.get(DJANGO_BASE_URL, { timeout: 8000 });
@@ -116,31 +91,8 @@ app.get("/debug/django", async (_req, res) => {
   }
 });
 
-// Optional: verify Chrome can launch (useful when diagnosing Render)
-app.get("/debug/browser", async (_req, res) => {
-  try {
-    const puppeteer = require("puppeteer");
-    const browser = await puppeteer.launch({
-      headless: "new",
-      args: [
-        "--no-sandbox",
-        "--disable-setuid-sandbox",
-        "--disable-dev-shm-usage",
-        "--disable-gpu",
-        `--user-data-dir=${CHROME_PROFILE_DIR}`,
-      ],
-    });
-    const page = await browser.newPage();
-    await page.goto("https://example.com", { waitUntil: "domcontentloaded" });
-    const title = await page.title();
-    await browser.close();
-    res.json({ ok: true, title });
-  } catch (e) {
-    res.status(500).json({ ok: false, error: String(e) });
-  }
-});
-
-app.get("/qr", (_req, res) => {
+// Browser QR page (helpful on Render)
+app.get("/qr", (req, res) => {
   if (WA_READY) return res.send("✅ WhatsApp connected. No QR needed.");
   if (!LAST_QR_DATAURL) return res.status(404).send("❌ No QR yet. Wait or check logs.");
   res.send(`
@@ -153,7 +105,6 @@ app.get("/qr", (_req, res) => {
         <hr/>
         <p><b>Status:</b> WA_READY=${WA_READY}</p>
         <p><b>AUTH_PATH:</b> ${AUTH_PATH}</p>
-        <p><b>Chrome profile:</b> ${CHROME_PROFILE_DIR}</p>
         <p><b>Django URL:</b> ${DJANGO_CHAT_URL}</p>
       </body>
     </html>
@@ -176,6 +127,7 @@ const client = new Client({
     dataPath: AUTH_PATH,
   }),
 
+  // Helps when sessions reconnect / conflicts happen
   takeoverOnConflict: true,
   takeoverTimeoutMs: 0,
 
@@ -186,17 +138,14 @@ const client = new Client({
       "--disable-setuid-sandbox",
       "--disable-dev-shm-usage",
       "--disable-gpu",
-      `--user-data-dir=${CHROME_PROFILE_DIR}`,
     ],
   },
 });
 
+// Extra logging so you always know what’s happening
 client.on("loading_screen", (percent, message) => {
   console.log(`⏳ loading_screen: ${percent}%`, message || "");
 });
-
-client.on("change_state", (state) => console.log("🔁 WA state:", state));
-client.on("remote_session_saved", () => console.log("💾 Remote session saved"));
 
 client.on("qr", async (qr) => {
   console.log("📲 QR RECEIVED (also available at /qr)");
@@ -366,6 +315,7 @@ client.on("message", async (msg) => {
         ? replyText
         : "⚠️ Sorry — I couldn’t process that. Please try again.";
 
+    // ✅ FIX: send reply via chat (more reliable than client.sendMessage for some WA web builds)
     console.log("📤 Sending reply to chat:", msg.from, finalReply);
 
     try {
@@ -388,35 +338,9 @@ client.on("message", async (msg) => {
 });
 
 // ----------------------------
-// Init + shutdown safety (with retry + lock cleanup)
+// Init + shutdown safety
 // ----------------------------
-async function initWhatsApp() {
-  console.log("🚀 Initializing WhatsApp client...");
-  try {
-    await client.initialize();
-    console.log("✅ client.initialize() started");
-    return;
-  } catch (e) {
-    console.error("❌ First initialize failed:", e?.message || e);
-
-    // clear profile locks and retry once
-    try {
-      clearChromeSingletonLocks(CHROME_PROFILE_DIR);
-      console.log("🧹 Cleared Chrome Singleton locks, retrying initialize...");
-    } catch {}
-
-    try {
-      await client.initialize();
-      console.log("✅ client.initialize() started after retry");
-      return;
-    } catch (e2) {
-      console.error("❌ Second initialize failed:", e2?.message || e2);
-      process.exit(1);
-    }
-  }
-}
-
-initWhatsApp();
+client.initialize();
 
 async function shutdown(signal) {
   console.log(`🛑 Received ${signal}, shutting down...`);
