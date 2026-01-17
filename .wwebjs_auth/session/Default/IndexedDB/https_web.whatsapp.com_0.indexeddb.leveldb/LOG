@@ -1,0 +1,13 @@
+2026/01/17-08:23:25.828 3d9c Reusing MANIFEST C:\Users\user\Desktop\Projects\wa-django-adapter\.wwebjs_auth\session\Default\IndexedDB\https_web.whatsapp.com_0.indexeddb.leveldb/MANIFEST-000001
+2026/01/17-08:23:26.054 3d9c Recovering log #168
+2026/01/17-08:23:26.925 3d9c Reusing old log C:\Users\user\Desktop\Projects\wa-django-adapter\.wwebjs_auth\session\Default\IndexedDB\https_web.whatsapp.com_0.indexeddb.leveldb/000168.log 
+2026/01/17-08:23:34.324 3f94 Level-0 table #173: started
+2026/01/17-08:23:35.077 3f94 Level-0 table #173: 540691 bytes OK
+2026/01/17-08:23:35.832 3f94 Delete type=0 #168
+2026/01/17-08:23:35.835 19c8 Manual compaction at level-0 from '\x00B\x00\x00\x00' @ 72057594037927935 : 1 .. '\x00C\x00\x00\x00' @ 0 : 0; will stop at '\x00B\x00\x00\x05' @ 162642 : 1
+2026/01/17-08:23:36.062 19c8 Compacting 1@0 + 1@1 files
+2026/01/17-08:23:38.133 19c8 Generated table #174@0: 79113 keys, 1646655 bytes
+2026/01/17-08:23:38.133 19c8 Compacted 1@0 + 1@1 files => 1646655 bytes
+2026/01/17-08:23:38.685 19c8 compacted to: files[ 0 1 1 0 0 0 0 ]
+2026/01/17-08:23:38.686 19c8 Delete type=2 #173
+2026/01/17-08:23:38.687 19c8 Manual compaction at level-0 from '\x00B\x00\x00\x05' @ 162642 : 1 .. '\x00C\x00\x00\x00' @ 0 : 0; will stop at (end)

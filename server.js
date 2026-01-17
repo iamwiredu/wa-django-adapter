@@ -121,27 +121,19 @@ app.listen(PORT, "0.0.0.0", () => {
 // ----------------------------
 // WhatsApp client
 // ----------------------------
-const client = new Client({
-  authStrategy: new LocalAuth({
-    clientId: "render-wa",
-    dataPath: AUTH_PATH,
-  }),
+    const client = new Client({
+        authStrategy: new LocalAuth(),
+        puppeteer: {
+            headless: true,
+            args: ["--disable-popup-blocking"],
 
-  // Helps when sessions reconnect / conflicts happen
-  takeoverOnConflict: true,
-  takeoverTimeoutMs: 0,
-
-  puppeteer: {
-    headless: true,
-    args: [
-      "--no-sandbox",
-      "--disable-setuid-sandbox",
-      "--disable-dev-shm-usage",
-      "--disable-gpu",
-    ],
-  },
-});
-
+        },
+        // temp
+        webVersionCache: {
+            type: 'remote',
+            remotePath: `https://raw.githubusercontent.com/wppconnect-team/wa-version/refs/heads/main/html/2.3000.1031490220-alpha.html`,    
+        },
+    });
 // Extra logging so you always know what’s happening
 client.on("loading_screen", (percent, message) => {
   console.log(`⏳ loading_screen: ${percent}%`, message || "");
@@ -267,19 +259,18 @@ client.on("message_create", (msg) => {
   });
 });
 
-client.on("message", (msg) => {
+// ----------------------------
+// Inbound WhatsApp → Django → Reply
+// ----------------------------
+client.on("message", async (msg) => {
+  // Basic receive log (so we don't need a second 'message' listener)
   console.log("🟢 message received:", {
     from: msg.from,
     fromMe: msg.fromMe,
     body: msg.body,
     type: msg.type,
   });
-});
 
-// ----------------------------
-// Inbound WhatsApp → Django → Reply
-// ----------------------------
-client.on("message", async (msg) => {
   try {
     console.log("🔥 inbound handler hit", { WA_READY, from: msg.from, body: msg.body });
 
@@ -313,26 +304,23 @@ client.on("message", async (msg) => {
     const finalReply =
       replyText && String(replyText).trim().length > 0
         ? replyText
-        : "⚠️ Sorry — I couldn’t process that. Please try again.";
+        : "Sorry — I couldn’t process that. Please try again.";
 
-    // ✅ FIX: send reply via chat (more reliable than client.sendMessage for some WA web builds)
-    console.log("📤 Sending reply to chat:", msg.from, finalReply);
+    console.log("➡️ Sending reply (msg.reply):", msg.from, finalReply);
 
+    // ✅ FIX: Use msg.reply (avoids chat state calls that trigger 'markedUnread' crashes)
     try {
-      const chat = await msg.getChat();
-      await chat.sendStateTyping();
-      await new Promise((r) => setTimeout(r, 400));
-      await chat.clearState();
-      await chat.sendMessage(finalReply);
+      await msg.reply(finalReply);
       console.log("✅ Reply sent");
     } catch (sendErr) {
       console.error("❌ Send failed:", sendErr?.message || sendErr);
     }
   } catch (err) {
     console.error("❌ Inbound error:", err?.response?.data || err.message || err);
+
+    // Best-effort fallback
     try {
-      const chat = await msg.getChat();
-      await chat.sendMessage("⚠️ System is busy. Please try again.");
+      await msg.reply("⚠️ System is busy. Please try again.");
     } catch {}
   }
 });
